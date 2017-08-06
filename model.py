@@ -1,27 +1,49 @@
 from keras.models import Sequential
-from keras.layers import Flatten, Dense, Lambda, Conv2D, Dropout
+from keras.layers import Flatten, Dense, Lambda, Conv2D, Dropout, LSTM
 
 import pandas as pd
 import cv2
 import numpy as np
+
 from sklearn.model_selection import train_test_split
 import matplotlib.image as mpimg
 
+# This is the original image shape, as written by the simulator
 origin_image_shape = (160, 320, 3)
+
+# This is the input shape for the NVidia net
 img_shape = (64, 160, 3)
+
+# Data dir for the images
 data_dir = "data/"
 
 
 def read_driving_log(csv_file=data_dir + 'driving_log.csv'):
+    """
+    Read the driving log from the file system
+    :param csv_file: the text file in csv format
+    :return: a Pandas data frame
+    """
     return pd.read_csv(csv_file)
 
 
 def read_image(filename):
+    """
+    Read an image
+    :param filename: the path
+    :return: an array of size origin_image_shape
+    """
     image = mpimg.imread(filename)
     return image
 
 
 def flip(image, angle):
+    """
+    Flip an image along the y axis. Also invert the camera angle
+    :param image: the input image
+    :param angle: the angle of the camera
+    :return: a tuple with the flipped image and the inverted angle
+    """
     image = np.array(image)
     flipped = cv2.flip(image, 1)
     angle = -angle
@@ -29,6 +51,11 @@ def flip(image, angle):
 
 
 def crop(image):
+    """
+    Crop the image to the target size.
+    :param image: the input image
+    :return: the cropped image
+    """
     image = image[66:130, 70:230]
     return image
 
@@ -51,20 +78,29 @@ def random_select_lcr(image_locations, augment):
 
 
 def jitter(img):
-    # see https://stackoverflow.com/questions/35152636/random-flipping-and-rgb-jittering-slight-value-change-of-image
-    R = img[:, :, 0]
-    G = img[:, :, 1]
-    B = img[:, :, 2]
+    """
+    Add jitter to an image. See https://stackoverflow.com/questions/35152636/random-flipping-and-rgb-jittering-slight-value-change-of-image
+    :param img: the input image
+    :return: an image with random jitter on all three color channels
+    """
+    r = img[:, :, 0]
+    g = img[:, :, 1]
+    b = img[:, :, 2]
     rgb_shifted = np.dstack((
-        np.roll(R, 10, axis=0),
-        np.roll(G, 10, axis=1),
-        np.roll(B, -10, axis=0)
+        np.roll(r, 10, axis=0),
+        np.roll(g, 10, axis=1),
+        np.roll(b, -10, axis=0)
     ))
     return rgb_shifted
 
 
 def rand_brightness(img):
-    # taken from https://github.com/vxy10/ImageAugmentation
+    """
+    Add random brightness to an image by turning it into HSV color space and randomizing its intensity.
+    Taken from https://github.com/vxy10/ImageAugmentation
+    :param img: the input array
+    :return: an array containing the image with random brightness
+    """
     image1 = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
     random_bright = .25 + np.random.uniform()
     image1[:, :, 2] = image1[:, :, 2] * random_bright
@@ -73,10 +109,24 @@ def rand_brightness(img):
 
 
 def normalize(img):
+    """
+    Normalize an image. This is not used by the model, but useful in order to visually explore normalilzation
+    :param img: an image
+    :return: the normalized image (between 0 and 1)
+    """
     return (img - 128.) / 128.
 
 
 def image_processing_step(sample, keep_probability=1, angle_threshold=0.01, augment=False):
+    """
+    This is the actual image processing pipeline.
+    :param sample: a simple Pandas series object
+    :param keep_probability: the probability how many 0-angles are to be kept
+    :param angle_threshold: the threshold of the angle that will be considered zero
+    :param augment: whether to augment an image at all. If False no augmentation will occur
+    :return: a list with tuples (action, angle, image) containing possibly augmented images, their respective angles
+    and the action that was performed
+    """
     images = []
     angle_of_center_image = sample.get("steering")
     if abs(angle_of_center_image) <= angle_threshold and np.random.uniform() > keep_probability:
@@ -106,14 +156,23 @@ def image_processing_step(sample, keep_probability=1, angle_threshold=0.01, augm
     return images
 
 
+def prepare_data(driving_log, augment=False):
+    """
+    Prepare the data so that it is properly split into train and test data.
 
-def prepare_data(driving_log, augment=True):
+    :param driving_log: the input Pandas Frame with the csv file
+    :param augment: whether to augment or not
+    :return: train and test data, with labels, in separate arrays
+    """
+
+    # Here the data is split in 80% train data and 20% validation data set
     train, test = train_test_split(driving_log, test_size=0.2)
 
+    # This also shuffles
     samples = train.sample(frac=1)
     processed = []
     for index, row in samples.iterrows():
-        pr = image_processing_step(row, augment=True)
+        pr = image_processing_step(row, augment)
         if len(pr) != 0:
             processed.extend(pr)
 
@@ -121,6 +180,7 @@ def prepare_data(driving_log, augment=True):
     X_train = np.array(X_train)
     y_train = np.array(y_train)
 
+    # The validation set always uses the center camera view, without augmentation applied
     test_images_path = np.array(test["center"])
     X_test = []
     for i in range(0, len(test_images_path)):
@@ -149,7 +209,6 @@ def build_NVIDIA_model():
     model.add(Dense(10, activation='elu'))
     model.add(Dense(1, activation='tanh'))
     return model
-
 
 driving_log = read_driving_log()
 X_train, y_train, X_test, y_test = prepare_data(driving_log, augment=True)
